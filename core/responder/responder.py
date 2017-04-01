@@ -253,7 +253,6 @@ class Responder(object):
         options['responder']['upstream_proxy'] = None
         options['responder']['analyze'] = False
         options['responder']['verbose'] = False
-    
 
         if not os.geteuid() == 0:
             print color("[!] Responder must be run as root.")

@@ -32,6 +32,7 @@ Upcoming Features
 - Updated hostapd-wpe that works with the latest version of Hostapd
 - Integrated website cloner for cloning captive portal login pages
 - Integrated HTTP server
+- Standalone SMB Relay server that is functionally similar to Responder's MultiRelay
 
 Will this tool ever support Karma attacks?
 

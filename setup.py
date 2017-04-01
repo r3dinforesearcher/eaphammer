@@ -1,8 +1,9 @@
-''' Commands borrowed from the original easy hostapd-wpe build script:
+''' Commands based on the original easy hostapd-wpe build script:
 http://blog.gojhonny.com/2015/08/pwning-wpa-enterprise-with-hostapd-on.html
 '''
 
 import os
+import sys
 import config
 
 print '[*] Downloading hostapd-%s...' % config.hostapd_version

